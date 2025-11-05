@@ -1,0 +1,23 @@
+[app]
+name = "OCR Backend"
+environment = "development"
+host = "0.0.0.0"
+port = 8000
+
+[logging]
+level = "INFO"
+json = true
+
+[storage]
+upload_dir = "uploads"
+
+[database]
+user = "postgres"
+password = "postgres"
+host = "localhost"
+port = 5433
+name = "ocr_db"
+pool_size = 10
+max_overflow = 10
+
+

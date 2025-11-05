@@ -1,0 +1,43 @@
+
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ocr_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  adminer:
+    image: adminer:latest
+    restart: always
+    ports:
+      - "8086:8080"
+    depends_on:
+      - db
+
+  # app:
+  #   build: .
+  #   environment:
+  #     - PYTHONPATH=/app
+  #     - DATABASE_HOST=localhost
+  #     - DATABASE_USER=postgres
+  #     - DATABASE_PASSWORD=postgres
+  #     - DATABASE_NAME=ocr_db
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - .:/app
+  #     - uploads:/app/uploads
+  #   depends_on:
+  #     - db
+
+volumes:
+  pgdata:
+  uploads:
+
+
