@@ -1,7 +1,7 @@
 [project]
 name = "ocr-backend"
 version = "0.1.0"
-description = "FastAPI backend for CNIC and vehicle OCR using OpenCV and PaddleOCR"
+description = "FastAPI backend for CNIC and vehicle OCR using OpenCV and EasyOCR"
 authors = [{ name = "Your Name" }]
 requires-python = ">=3.12,<3.13"
 readme = "README.md"
@@ -13,8 +13,7 @@ dependencies = [
   "psycopg[binary]>=3.1.18",
   "python-multipart>=0.0.9",
   "opencv-python-headless==4.10.0.84",
-  "paddleocr==3.0.0",
-  "paddlepaddle==3.0.0",
+  "easyocr>=1.7.2",
   "pydantic>=2.8.2",
   "pydantic-core>=2.20.1",
 ]

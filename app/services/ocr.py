@@ -1,10 +1,10 @@
-from typing import List, Tuple
+from typing import List, Tuple, Any
 import os
 from pathlib import Path
 from threading import Lock
 
 import numpy as np
-from paddleocr import PaddleOCR
+import easyocr
 
 from app.core.logging import get_logger
 
@@ -12,81 +12,39 @@ logger = get_logger(__name__)
 
 
 # Thread-safe singleton instance
-_ocr_instance: PaddleOCR | None = None
+_ocr_instance: Any | None = None
 _ocr_lock: Lock = Lock()
 
 
 def _resolve_model_paths() -> dict:
-    r"""Resolve explicit model directories if provided via env or conventional paths.
-
-    Priority:
-    1) Environment variables: OCR_DET_MODEL_DIR, OCR_REC_MODEL_DIR, OCR_CLS_MODEL_DIR
-    2) Default local paths under C:\Users\hp\.paddlex\official_models
-    """
-    base_models_dir = Path(os.getenv("OCR_MODELS_DIR", r"C:\Users\hp\.paddlex\official_models")).resolve()
-
-    det_dir_env = os.getenv("OCR_DET_MODEL_DIR")
-    rec_dir_env = os.getenv("OCR_REC_MODEL_DIR")
-    cls_dir_env = os.getenv("OCR_CLS_MODEL_DIR")
-
-    # Use actual folder names from your system
-    det_model_dir = Path(det_dir_env) if det_dir_env else base_models_dir / "PP-OCRv5_mobile_det"
-    # rec_model_dir = Path(rec_dir_env) if rec_dir_env else base_models_dir / "en_PP-OCRv5_mobile_rec"  # Fixed
-    rec_model_dir = Path(rec_dir_env) if rec_dir_env else base_models_dir / "PP-OCRv5_mobile_rec"  # Fixed
-    cls_model_dir = Path(cls_dir_env) if cls_dir_env else None  # Optional
-
-    paths: dict = {}
-
-    if det_model_dir.exists():
-        paths["det_model_dir"] = str(det_model_dir)
-    if rec_model_dir.exists():
-        paths["rec_model_dir"] = str(rec_model_dir)
-    if cls_model_dir and cls_model_dir.exists():
-        paths["cls_model_dir"] = str(cls_model_dir)
-
-    logger.info(
-        "ocr.model_paths",
-        has_det=det_model_dir.exists(),
-        has_rec=rec_model_dir.exists(),
-        has_cls=cls_model_dir.exists() if cls_dir_env else False,
-        base=str(base_models_dir),
-        det_path=str(det_model_dir),
-        rec_path=str(rec_model_dir),
-    )
-
-    return paths
+    """Placeholder kept for compatibility; EasyOCR manages its own models."""
+    return {}
 
 
-def _create_ocr_instance() -> PaddleOCR:
-    model_paths = _resolve_model_paths()
+def _create_ocr_instance() -> Any:
+    _ = _resolve_model_paths()
 
-    logger.info("ocr.init.start", use_gpu=False, enable_mkldnn=True, lang="en")
-    ocr = PaddleOCR(
-        use_angle_cls=True,
-        lang="en",
-        # use_gpu=False,
-        enable_mkldnn=True,
-        **model_paths,
-    )
+    logger.info("ocr.init.start", ocr_engine="easyocr", gpu=False, lang="en")
+    reader = easyocr.Reader(["en"], gpu=False, verbose=False)
     logger.info("ocr.init.success")
-    _prewarm_ocr(ocr)
-    return ocr
+    _prewarm_ocr(reader)
+    return reader
 
 
-def _prewarm_ocr(ocr: PaddleOCR) -> None:
+def _prewarm_ocr(ocr: Any) -> None:
     """Run a tiny inference once to load weights into memory.
     This reduces first-request latency and surfaces init errors early.
     """
     try:
         dummy = np.zeros((16, 64, 3), dtype=np.uint8)
         logger.info("ocr.prewarm.start", shape=list(dummy.shape))
-        _ = ocr.ocr(dummy)
+        _ = ocr.readtext(dummy)
         logger.info("ocr.prewarm.ok")
     except Exception as e:
         logger.error("ocr.prewarm.failed", error=str(e))
 
 
-def get_ocr() -> PaddleOCR:
+def get_ocr() -> Any:
     global _ocr_instance
     if _ocr_instance is not None:
         return _ocr_instance
@@ -154,6 +112,23 @@ def _normalize_ocr_result(result):
                     sc = scores
                 page.append([box, (text, sc)])
             return [page]
+    # EasyOCR format: [ [box(points)], text, score ]
+    try:
+        if isinstance(result, (list, tuple)) and result:
+            first = result[0]
+            if isinstance(first, (list, tuple)) and len(first) == 3 and not isinstance(first[1], (list, tuple, dict)):
+                page = []
+                for item in result:
+                    try:
+                        box, text, score = item[0], item[1], item[2]
+                        if text is None or str(text).strip() == "":
+                            continue
+                        page.append([box, (text, score)])
+                    except Exception:
+                        continue
+                return [page]
+    except Exception:
+        pass
     return result
 
 
@@ -174,7 +149,7 @@ def ocr_text(image: np.ndarray) -> List[Tuple[str, float]]:
 
     ocr = get_ocr()
     try:
-        result = ocr.ocr(image)
+        result = ocr.readtext(image)
         result = _normalize_ocr_result(result)
 
         # === DEBUG: Dump raw OCR result ===
