@@ -25,6 +25,31 @@ router = APIRouter()
 logger = get_logger()
 
 
+def _clean_ocr_text(text: str) -> str:
+    """Lightweight cleaning for OCR lines to stabilize downstream parsing.
+    - Trim, collapse whitespace
+    - Normalize common lookalikes and punctuation
+    - Keep letters, digits, and common separators
+    """
+    if not isinstance(text, str):
+        return ""
+    s = text.strip()
+    if not s:
+        return ""
+    # Normalize unicode quotes/dashes and separators
+    s = s.replace("\u2013", "-").replace("\u2014", "-")  # en/em dash → hyphen
+    s = s.replace("\u2018", "'").replace("\u2019", "'")  # curly quotes → straight
+    s = s.replace("\u201c", '"').replace("\u201d", '"')
+    s = s.replace("|", "I")  # pipe → I
+    s = s.replace("$", "S")  # dollar → S
+    s = s.replace(",", ".")  # commas often used as dot
+    # Collapse whitespace
+    s = re.sub(r"\s+", " ", s)
+    # Keep only reasonable characters for CNIC parsing
+    s = re.sub(r"[^A-Za-z0-9 .\-/:]", "", s)
+    return s.strip()
+
+
 def _store_upload(file: UploadFile, subdir: str) -> Path:
     ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
     ext = Path(file.filename or "upload").suffix or ".jpg"
@@ -116,8 +141,13 @@ def _parse_cnic_fields(texts: Dict[int, str]) -> Dict[str, str]:
         result["date_of_expiry"] = valid_dates[2].replace(".", "-")
 
     # === 3. NAME & FATHER NAME (Urdu + English handling) ===
-    name_keywords = ["NAME", "HOLDER", "SAIF", "MUHAMMAD", "AHMED", "KHAN", "ALI"]
-    father_keywords = ["FATHER", "GHULAM", "HUSSAIN", "S/O", "D/O", "SON", "DAUGHTER"]
+    name_keywords = ["NAME"]
+    father_keywords = ["FATHER", "S/O", "D/O", "SON", "DAUGHTER"]
+    stopwords = {
+        "OF", "THE", "AND", "IS", "CARD", "IDENTITY", "NATIONAL", "ISLAMIC", "REPUBLIC",
+        "PAKISTAN", "COUNTRY", "GENDER", "DATE", "BIRTH", "ISSUE", "EXPIRY", "HOLDER",
+        "SIGNATURE", "NAME", "FATHER"
+    }
 
     name_found = False
     father_found = False
@@ -128,14 +158,14 @@ def _parse_cnic_fields(texts: Dict[int, str]) -> Dict[str, str]:
         # Look for Name
         if not name_found and any(k in line_clean for k in name_keywords):
             words = line_clean.split()
-            # Take words after keyword
+            # Take words after keyword on same line if present
             name_parts = []
             started = False
             for w in words:
                 if any(k in w for k in name_keywords):
                     started = True
                     continue
-                if started and w.isalpha() and len(w) >= 2:
+                if started and w.isalpha() and len(w) >= 2 and w not in stopwords:
                     name_parts.append(w)
                 elif started and len(name_parts) > 0:
                     break
@@ -152,13 +182,46 @@ def _parse_cnic_fields(texts: Dict[int, str]) -> Dict[str, str]:
                 if any(k in w for k in father_keywords):
                     started = True
                     continue
-                if started and w.isalpha() and len(w) >= 3:
+                if started and w.isalpha() and len(w) >= 3 and w not in stopwords:
                     father_parts.append(w)
                 elif started and len(father_parts) > 0:
                     break
             if father_parts:
                 result["father_name"] = " ".join(father_parts)
                 father_found = True
+
+    # Fallback: if not found, look at the next lines following the keyword line
+    if not name_found:
+        for idx, line in enumerate(lines):
+            if "NAME" in re.sub(r'[^A-Z\s]', ' ', line):
+                # find next non-empty line(s)
+                for j in range(idx + 1, min(idx + 4, len(lines))):
+                    nxt = re.sub(r'[^A-Z\s]', ' ', lines[j]).strip()
+                    if not nxt:
+                        continue
+                    tokens = [w for w in nxt.split() if w.isalpha() and len(w) >= 2 and w not in stopwords]
+                    if len(tokens) >= 1:
+                        result["name"] = " ".join(tokens[:4])
+                        name_found = True
+                        break
+            if name_found:
+                break
+
+    if not father_found:
+        for idx, line in enumerate(lines):
+            line_u = re.sub(r'[^A-Z\s]', ' ', line)
+            if any(k in line_u for k in father_keywords):
+                for j in range(idx + 1, min(idx + 4, len(lines))):
+                    nxt = re.sub(r'[^A-Z\s]', ' ', lines[j]).strip()
+                    if not nxt:
+                        continue
+                    tokens = [w for w in nxt.split() if w.isalpha() and len(w) >= 3 and w not in stopwords]
+                    if len(tokens) >= 1:
+                        result["father_name"] = " ".join(tokens[:4])
+                        father_found = True
+                        break
+            if father_found:
+                break
 
     # === 4. GENDER ===
     if "MALE" in full_text or "M " in full_text:
@@ -204,8 +267,10 @@ def _best_plate_candidate(pairs) -> Optional[str]:
     best_conf = 0.0
 
     for text, conf in pairs:
+        # Normalize EasyOCR (0–1) to percentage if needed
+        conf_pct = (conf * 100.0) if (isinstance(conf, (int, float)) and conf <= 1.0) else conf
         # Confidence threshold: skip very low quality OCR
-        if conf < 40:
+        if conf_pct < 40:
             continue
 
         match = plate_pattern.search(text)
@@ -218,9 +283,9 @@ def _best_plate_candidate(pairs) -> Optional[str]:
         # Optional: boost confidence if "SINDH" appears anywhere in OCR results
         full_text = " ".join(t for t, _ in pairs).upper()
         if "SINDH" in full_text:
-            conf_boost = conf + 10  # small boost for context confirmation
+            conf_boost = conf_pct + 10  # small boost for context confirmation
         else:
-            conf_boost = conf
+            conf_boost = conf_pct
 
         if conf_boost > best_conf:
             best_conf = conf_boost
