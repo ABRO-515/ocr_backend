@@ -5,7 +5,6 @@ description = "FastAPI backend for CNIC and vehicle OCR using OpenCV and PaddleO
 authors = [{ name = "Your Name" }]
 requires-python = ">=3.12,<3.13"
 readme = "README.md"
-
 dependencies = [
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.30.0",
@@ -20,8 +19,9 @@ dependencies = [
   "pydantic-core>=2.20.1",
 ]
 
-[tool.uv]
-dev-dependencies = [
+# NEW: Use dependency-groups instead of tool.uv.dev-dependencies
+[dependency-groups]
+dev = [
   "black>=24.8.0",
   "ruff>=0.6.0",
 ]
@@ -33,5 +33,3 @@ target-version = "py312"
 [tool.black]
 line-length = 100
 target-version = ["py312"]
-
-
